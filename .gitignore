@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+# Streamlit secrets (importante: no subir tu API key)
+.streamlit/secrets.toml
+
+# Base de datos
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
