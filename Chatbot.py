@@ -132,13 +132,15 @@ if not GROQ_API_KEY:
     st.stop()
 
 MODELOS_GROQ = {
-    "🐪 Llama 3.3 70B": {"id": "llama-3.3-70b-versatile", "desc": "Muy potente"},
-    "⚡ Llama 3.1 8B": {"id": "llama-3.1-8b-instant", "desc": "El más rápido"},
-    "🔬 DeepSeek R1 70B": {"id": "deepseek-r1-distill-llama-70b", "desc": "Razonamiento"},
-    "🧠 Qwen QwQ 32B": {"id": "qwen-qwq-32b", "desc": "Explicaciones"},
-    "📝 Gemma 2 9B": {"id": "gemma2-9b-it", "desc": "Equilibrado"},
-    "🎯 Mixtral 8x7B": {"id": "mixtral-8x7b-32768", "desc": "Contexto enorme"},
-    "💻 Qwen Coder 32B": {"id": "qwen-2.5-coder-32b", "desc": "Programación"},
+    "🐪 Llama 3.3 70B": {"id": "llama-3.3-70b-versatile", "desc": "Muy potente, ideal para tareas complejas"},
+    "⚡ Llama 3.1 8B": {"id": "llama-3.1-8b-instant", "desc": "El más rápido, perfecto para chat"},
+    "🔬 DeepSeek R1 70B": {"id": "deepseek-r1-distill-llama-70b", "desc": "Especializado en razonamiento y código"},
+    "🧠 Qwen QwQ 32B": {"id": "qwen-qwq-32b", "desc": "Explicaciones paso a paso, razonamiento"},
+    "🎯 Mixtral 8x7B": {"id": "mixtral-8x7b-32768", "desc": "Contexto enorme (32K tokens)"},
+    "💻 Qwen Coder 32B": {"id": "qwen-2.5-coder-32b", "desc": "Especializado en programación"},
+    # 🆕 NUEVOS MODELOS (reemplazan a Gemma 2)
+    "🆕 Llama 4 Maverick 17B": {"id": "meta-llama/llama-4-maverick-17b-128e-instruct", "desc": "Nuevo modelo de Meta, 600 tokens/seg"},
+    "🆕 Llama 4 Scout 17B": {"id": "meta-llama/llama-4-scout-17b-16e-instruct", "desc": "Contexto de 131K tokens, 750 tokens/seg"},
 }
 
 PROMPT_PERSONALIDAD = """Eres un asistente con personalidad. Elige tu nombre y preséntate.
