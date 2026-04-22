@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import json
 import sqlite3
-import hashlib
+import uuid
 from datetime import datetime
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage
@@ -10,7 +10,7 @@ from langchain_core.prompts import PromptTemplate
 
 st.set_page_config(page_title="Chatbot Personal", page_icon="🤖", layout="wide")
 st.title("🤖 Chatbot")
-st.markdown("💡 **Tus conversaciones se guardan automáticamente**")
+st.markdown("💡 **Tus conversaciones son privadas** - Cada dispositivo tiene su propio espacio")
 
 # ============================================
 # BASE DE DATOS
@@ -20,7 +20,7 @@ def init_database():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS conversaciones
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  usuario_id TEXT,
+                  dispositivo_id TEXT,
                   session_id TEXT,
                   titulo TEXT,
                   fecha_creacion TEXT,
@@ -31,16 +31,25 @@ def init_database():
     conn.commit()
     conn.close()
 
-def get_usuario_id():
-    """ID persistente en la URL"""
-    if "uid" in st.query_params and st.query_params["uid"]:
-        return st.query_params["uid"]
+def get_dispositivo_id():
+    """
+    CRÍTICO: ID ÚNICO y PRIVADO.
+    - Se guarda SOLO en session_state (memoria del navegador)
+    - NO aparece en la URL
+    - NO se comparte al enviar el enlace
+    - Cada navegador/dispositivo genera el suyo propio
+    """
+    if "dispositivo_id" in st.session_state and st.session_state.dispositivo_id:
+        return st.session_state.dispositivo_id
     
-    nuevo_id = hashlib.md5(f"{datetime.now()}".encode()).hexdigest()[:16]
-    st.query_params["uid"] = nuevo_id
+    # Generar ID único para este navegador/dispositivo
+    nuevo_id = str(uuid.uuid4())[:16]
+    st.session_state.dispositivo_id = nuevo_id
+    
+    # NO guardar en query_params - así el ID NO está en la URL
     return nuevo_id
 
-def guardar_conversacion(usuario_id, session_id, mensajes, modelo):
+def guardar_conversacion(dispositivo_id, session_id, mensajes, modelo):
     if not mensajes:
         return
     
@@ -62,31 +71,31 @@ def guardar_conversacion(usuario_id, session_id, mensajes, modelo):
     
     ultimo = mensajes[-1].content[:50] + "..." if len(mensajes[-1].content) > 50 else mensajes[-1].content
     
-    c.execute("SELECT id FROM conversaciones WHERE usuario_id = ? AND session_id = ?", 
-              (usuario_id, session_id))
+    c.execute("SELECT id FROM conversaciones WHERE dispositivo_id = ? AND session_id = ?", 
+              (dispositivo_id, session_id))
     existe = c.fetchone()
     
     if existe:
         c.execute("""UPDATE conversaciones 
                      SET fecha_actualizacion = ?, mensajes = ?, modelo_usado = ?, 
                          ultimo_mensaje = ?, titulo = ?
-                     WHERE usuario_id = ? AND session_id = ?""",
-                  (ahora, mensajes_json, modelo, ultimo, titulo, usuario_id, session_id))
+                     WHERE dispositivo_id = ? AND session_id = ?""",
+                  (ahora, mensajes_json, modelo, ultimo, titulo, dispositivo_id, session_id))
     else:
         c.execute("""INSERT INTO conversaciones 
-                     (usuario_id, session_id, titulo, fecha_creacion, fecha_actualizacion, 
+                     (dispositivo_id, session_id, titulo, fecha_creacion, fecha_actualizacion, 
                       mensajes, modelo_usado, ultimo_mensaje) 
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                  (usuario_id, session_id, titulo, ahora, ahora, mensajes_json, modelo, ultimo))
+                  (dispositivo_id, session_id, titulo, ahora, ahora, mensajes_json, modelo, ultimo))
     
     conn.commit()
     conn.close()
 
-def cargar_conversacion(usuario_id, session_id):
+def cargar_conversacion(dispositivo_id, session_id):
     conn = sqlite3.connect('conversaciones.db')
     c = conn.cursor()
-    c.execute("SELECT mensajes FROM conversaciones WHERE usuario_id = ? AND session_id = ?", 
-              (usuario_id, session_id))
+    c.execute("SELECT mensajes FROM conversaciones WHERE dispositivo_id = ? AND session_id = ?", 
+              (dispositivo_id, session_id))
     resultado = c.fetchone()
     conn.close()
     
@@ -96,29 +105,30 @@ def cargar_conversacion(usuario_id, session_id):
                 else AIMessage(content=m['content']) for m in mensajes_json]
     return []
 
-def listar_conversaciones(usuario_id):
+def listar_conversaciones(dispositivo_id):
+    """SOLO las conversaciones de este dispositivo"""
     conn = sqlite3.connect('conversaciones.db')
     c = conn.cursor()
     c.execute("""SELECT session_id, titulo, fecha_actualizacion, modelo_usado, ultimo_mensaje 
                  FROM conversaciones 
-                 WHERE usuario_id = ? 
-                 ORDER BY fecha_actualizacion DESC""", (usuario_id,))
+                 WHERE dispositivo_id = ? 
+                 ORDER BY fecha_actualizacion DESC""", (dispositivo_id,))
     conversaciones = c.fetchall()
     conn.close()
     return conversaciones
 
-def eliminar_conversacion(usuario_id, session_id):
+def eliminar_conversacion(dispositivo_id, session_id):
     conn = sqlite3.connect('conversaciones.db')
     c = conn.cursor()
-    c.execute("DELETE FROM conversaciones WHERE usuario_id = ? AND session_id = ?", 
-              (usuario_id, session_id))
+    c.execute("DELETE FROM conversaciones WHERE dispositivo_id = ? AND session_id = ?", 
+              (dispositivo_id, session_id))
     conn.commit()
     conn.close()
 
-def eliminar_todas(usuario_id):
+def eliminar_todas(dispositivo_id):
     conn = sqlite3.connect('conversaciones.db')
     c = conn.cursor()
-    c.execute("DELETE FROM conversaciones WHERE usuario_id = ?", (usuario_id,))
+    c.execute("DELETE FROM conversaciones WHERE dispositivo_id = ?", (dispositivo_id,))
     conn.commit()
     conn.close()
 
@@ -128,38 +138,30 @@ def eliminar_todas(usuario_id):
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if not GROQ_API_KEY:
-    st.error("❌ Configura GROQ_API_KEY con: setx GROQ_API_KEY 'tu-key'")
+    try:
+        if "GROQ_API_KEY" in st.secrets:
+            GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+    except:
+        pass
+
+if not GROQ_API_KEY:
+    st.error("""
+    ❌ **No se encontró la API Key de Groq**
+    
+    **Configúrala con:**
+    - `setx GROQ_API_KEY "tu-key"` (Windows)
+    - O en Streamlit Cloud: Settings → Secrets
+    """)
     st.stop()
 
 MODELOS_GROQ = {
-    "🐪 Llama 3.3 70B": {
-        "id": "llama-3.3-70b-versatile", 
-        "desc": "Muy potente, ideal para tareas complejas"
-    },
-    "⚡ Llama 3.1 8B": {
-        "id": "llama-3.1-8b-instant", 
-        "desc": "El más rápido, perfecto para chat"
-    },
-    "🦙 Llama 4 Maverick 17B": {
-        "id": "meta-llama/llama-4-maverick-17b-128e-instruct", 
-        "desc": "Nuevo modelo de Meta, 600 tokens/seg"
-    },
-    "🚀 Llama 4 Scout 17B": {
-        "id": "meta-llama/llama-4-scout-17b-16e-instruct", 
-        "desc": "Contexto 131K tokens, 750 tokens/seg"
-    },
-    "🧠 Qwen QwQ 32B": {
-        "id": "qwen-qwq-32b", 
-        "desc": "Explicaciones paso a paso, razonamiento"
-    },
-    "💻 Qwen Coder 32B": {
-        "id": "qwen-2.5-coder-32b", 
-        "desc": "Especializado en programación"
-    },
-    "🎯 Mixtral 8x7B": {
-        "id": "mixtral-8x7b-32768", 
-        "desc": "Contexto enorme (32K tokens)"
-    },
+    "🐪 Llama 3.3 70B": {"id": "llama-3.3-70b-versatile", "desc": "Muy potente"},
+    "⚡ Llama 3.1 8B": {"id": "llama-3.1-8b-instant", "desc": "El más rápido"},
+    "🦙 Llama 4 Maverick 17B": {"id": "meta-llama/llama-4-maverick-17b-128e-instruct", "desc": "Nuevo modelo"},
+    "🚀 Llama 4 Scout 17B": {"id": "meta-llama/llama-4-scout-17b-16e-instruct", "desc": "Contexto 131K"},
+    "🧠 Qwen QwQ 32B": {"id": "qwen-qwq-32b", "desc": "Razonamiento"},
+    "💻 Qwen Coder 32B": {"id": "qwen-2.5-coder-32b", "desc": "Programación"},
+    "🎯 Mixtral 8x7B": {"id": "mixtral-8x7b-32768", "desc": "Contexto enorme"},
 }
 
 PROMPT_PERSONALIDAD = """Eres un asistente con personalidad. Elige tu nombre y preséntate.
@@ -172,32 +174,24 @@ Mensaje: {mensaje}
 Respuesta natural:"""
 
 # ============================================
-# INICIALIZACIÓN - CRÍTICO: CARGAR CONVERSACIÓN
+# INICIALIZACIÓN - SIN ID EN LA URL
 # ============================================
 init_database()
-USUARIO_ID = get_usuario_id()
+DISPOSITIVO_ID = get_dispositivo_id()
 
-# --- IMPORTANTE: Cargar la conversación correcta al iniciar ---
-# Primero, obtener la conversación actual desde la URL o crear una nueva
-if "conv" not in st.query_params or not st.query_params["conv"]:
-    # No hay conversación en la URL, crear nueva
-    nueva_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    st.query_params["conv"] = nueva_id
-    st.session_state.session_actual = nueva_id
+# Gestión de conversación actual (tampoco va en la URL)
+if "session_actual" not in st.session_state:
+    # Crear nueva conversación para este dispositivo
+    st.session_state.session_actual = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     st.session_state.mensajes = []
 else:
-    # Hay una conversación en la URL
-    session_id = st.query_params["conv"]
-    st.session_state.session_actual = session_id
-    
-    # Cargar los mensajes desde la base de datos
-    mensajes_cargados = cargar_conversacion(USUARIO_ID, session_id)
+    # Cargar conversación existente desde session_state
+    mensajes_cargados = cargar_conversacion(DISPOSITIVO_ID, st.session_state.session_actual)
     if mensajes_cargados:
         st.session_state.mensajes = mensajes_cargados
     else:
         st.session_state.mensajes = []
 
-# Asegurar que modelo_seleccionado existe en session_state
 if "modelo_seleccionado" not in st.session_state:
     st.session_state.modelo_seleccionado = "🐪 Llama 3.3 70B"
 
@@ -207,7 +201,7 @@ if "modelo_seleccionado" not in st.session_state:
 def auto_guardar():
     if st.session_state.mensajes:
         guardar_conversacion(
-            USUARIO_ID, 
+            DISPOSITIVO_ID, 
             st.session_state.session_actual, 
             st.session_state.mensajes, 
             st.session_state.modelo_seleccionado
@@ -217,24 +211,24 @@ def auto_guardar():
 # SIDEBAR
 # ============================================
 with st.sidebar:
-    st.info(f"🔗 Tu ID: `{USUARIO_ID[:8]}...`")
-    st.caption("💡 Comparte el enlace completo para mantener tus conversaciones")
+    # ADVERTENCIA DE PRIVACIDAD
+    st.info("🔒 **Conversaciones 100% privadas**")
+    st.caption("✅ Cada dispositivo tiene su propio espacio")
+    st.caption("✅ Compartir el enlace NO da acceso a tus conversaciones")
     st.divider()
     
     # Nueva conversación
     if st.button("➕ Nueva conversación", use_container_width=True, type="primary"):
         auto_guardar()
-        nueva_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         st.session_state.mensajes = []
-        st.session_state.session_actual = nueva_id
-        st.query_params["conv"] = nueva_id
+        st.session_state.session_actual = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         st.rerun()
     
     st.divider()
     
-    # Lista de conversaciones
+    # Lista de conversaciones (SOLO de este dispositivo)
     st.header("📚 Tus conversaciones")
-    conversaciones = listar_conversaciones(USUARIO_ID)
+    conversaciones = listar_conversaciones(DISPOSITIVO_ID)
     
     if conversaciones:
         for session_id, titulo, fecha, modelo, preview in conversaciones:
@@ -244,9 +238,8 @@ with st.sidebar:
             if st.button(f"{emoji}{titulo[:35]}", key=f"btn_{session_id}", use_container_width=True):
                 if not is_current:
                     auto_guardar()
-                    st.session_state.mensajes = cargar_conversacion(USUARIO_ID, session_id)
+                    st.session_state.mensajes = cargar_conversacion(DISPOSITIVO_ID, session_id)
                     st.session_state.session_actual = session_id
-                    st.query_params["conv"] = session_id
                     st.rerun()
             st.caption(f"📅 {fecha[:16]} | {preview[:30] if preview else 'Nueva'}")
     else:
@@ -275,7 +268,7 @@ with st.sidebar:
     with st.expander("🗑️ Borrar"):
         if conversaciones:
             if st.button("🗑️ Eliminar TODAS", type="primary"):
-                eliminar_todas(USUARIO_ID)
+                eliminar_todas(DISPOSITIVO_ID)
                 st.session_state.mensajes = []
                 st.rerun()
             
@@ -284,7 +277,7 @@ with st.sidebar:
                                      options=[(s, t) for s, t, _, _, _ in conversaciones],
                                      format_func=lambda x: x[1][:40])
             if borrar_id and st.button("🗑️ Eliminar esta"):
-                eliminar_conversacion(USUARIO_ID, borrar_id[0])
+                eliminar_conversacion(DISPOSITIVO_ID, borrar_id[0])
                 if st.session_state.session_actual == borrar_id[0]:
                     st.session_state.mensajes = []
                 st.rerun()
@@ -342,4 +335,4 @@ if pregunta and 'cadena' in locals():
         st.error(f"Error: {e}")
 
 st.markdown("---")
-st.caption("💾 **Guardado automático** | 🔄 **Recarga la página y tus conversaciones siguen aquí**")
+st.caption("🔒 **Privacidad total** - Cada dispositivo tiene sus propias conversaciones. Compartir el enlace no comparte tus chats.")
