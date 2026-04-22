@@ -13,14 +13,16 @@ st.title("🤖 Chatbot")
 st.markdown("💡 **Tus conversaciones son privadas** - Cada dispositivo tiene su propio espacio")
 
 # ============================================
-# BASE DE DATOS
+# BASE DE DATOS CON MIGRACIÓN
 # ============================================
 def init_database():
     conn = sqlite3.connect('conversaciones.db')
     c = conn.cursor()
+    
+    # Crear tabla si no existe (estructura base)
     c.execute('''CREATE TABLE IF NOT EXISTS conversaciones
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  dispositivo_id TEXT,
+                  usuario_id TEXT,
                   session_id TEXT,
                   titulo TEXT,
                   fecha_creacion TEXT,
@@ -28,25 +30,46 @@ def init_database():
                   mensajes TEXT,
                   modelo_usado TEXT,
                   ultimo_mensaje TEXT)''')
+    
+    conn.commit()
+    conn.close()
+
+def migrar_base_datos():
+    """Actualiza la base de datos de versión anterior a la nueva"""
+    conn = sqlite3.connect('conversaciones.db')
+    c = conn.cursor()
+    
+    # Verificar columnas existentes
+    c.execute("PRAGMA table_info(conversaciones)")
+    columnas = [columna[1] for columna in c.fetchall()]
+    
+    # Agregar columna dispositivo_id si no existe
+    if 'dispositivo_id' not in columnas:
+        try:
+            # Si existe usuario_id, renombrarla
+            if 'usuario_id' in columnas:
+                c.execute("ALTER TABLE conversaciones RENAME COLUMN usuario_id TO dispositivo_id")
+                st.info("📀 Base de datos actualizada: usuario_id → dispositivo_id")
+            else:
+                # Si no existe ninguna, crear nueva
+                c.execute("ALTER TABLE conversaciones ADD COLUMN dispositivo_id TEXT")
+                st.info("📀 Base de datos actualizada: columna dispositivo_id agregada")
+        except Exception as e:
+            st.warning(f"Nota: {e}")
+    
     conn.commit()
     conn.close()
 
 def get_dispositivo_id():
     """
-    CRÍTICO: ID ÚNICO y PRIVADO.
-    - Se guarda SOLO en session_state (memoria del navegador)
-    - NO aparece en la URL
-    - NO se comparte al enviar el enlace
-    - Cada navegador/dispositivo genera el suyo propio
+    ID ÚNICO y PRIVADO por navegador/dispositivo.
+    NO aparece en la URL.
     """
     if "dispositivo_id" in st.session_state and st.session_state.dispositivo_id:
         return st.session_state.dispositivo_id
     
-    # Generar ID único para este navegador/dispositivo
     nuevo_id = str(uuid.uuid4())[:16]
     st.session_state.dispositivo_id = nuevo_id
-    
-    # NO guardar en query_params - así el ID NO está en la URL
     return nuevo_id
 
 def guardar_conversacion(dispositivo_id, session_id, mensajes, modelo):
@@ -71,6 +94,7 @@ def guardar_conversacion(dispositivo_id, session_id, mensajes, modelo):
     
     ultimo = mensajes[-1].content[:50] + "..." if len(mensajes[-1].content) > 50 else mensajes[-1].content
     
+    # Usar dispositivo_id (nuevo nombre)
     c.execute("SELECT id FROM conversaciones WHERE dispositivo_id = ? AND session_id = ?", 
               (dispositivo_id, session_id))
     existe = c.fetchone()
@@ -106,7 +130,6 @@ def cargar_conversacion(dispositivo_id, session_id):
     return []
 
 def listar_conversaciones(dispositivo_id):
-    """SOLO las conversaciones de este dispositivo"""
     conn = sqlite3.connect('conversaciones.db')
     c = conn.cursor()
     c.execute("""SELECT session_id, titulo, fecha_actualizacion, modelo_usado, ultimo_mensaje 
@@ -174,18 +197,18 @@ Mensaje: {mensaje}
 Respuesta natural:"""
 
 # ============================================
-# INICIALIZACIÓN - SIN ID EN LA URL
+# INICIALIZACIÓN
 # ============================================
 init_database()
+migrar_base_datos()  # ← CRÍTICO: Actualiza la base de datos
+
 DISPOSITIVO_ID = get_dispositivo_id()
 
-# Gestión de conversación actual (tampoco va en la URL)
+# Gestión de conversación actual
 if "session_actual" not in st.session_state:
-    # Crear nueva conversación para este dispositivo
     st.session_state.session_actual = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     st.session_state.mensajes = []
 else:
-    # Cargar conversación existente desde session_state
     mensajes_cargados = cargar_conversacion(DISPOSITIVO_ID, st.session_state.session_actual)
     if mensajes_cargados:
         st.session_state.mensajes = mensajes_cargados
@@ -211,13 +234,11 @@ def auto_guardar():
 # SIDEBAR
 # ============================================
 with st.sidebar:
-    # ADVERTENCIA DE PRIVACIDAD
     st.info("🔒 **Conversaciones 100% privadas**")
     st.caption("✅ Cada dispositivo tiene su propio espacio")
     st.caption("✅ Compartir el enlace NO da acceso a tus conversaciones")
     st.divider()
     
-    # Nueva conversación
     if st.button("➕ Nueva conversación", use_container_width=True, type="primary"):
         auto_guardar()
         st.session_state.mensajes = []
@@ -226,7 +247,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Lista de conversaciones (SOLO de este dispositivo)
     st.header("📚 Tus conversaciones")
     conversaciones = listar_conversaciones(DISPOSITIVO_ID)
     
@@ -247,7 +267,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Configuración
     with st.expander("⚙️ Configuración"):
         modelo = st.selectbox("Modelo", list(MODELOS_GROQ.keys()), key="modelo_select")
         st.session_state.modelo_seleccionado = modelo
@@ -264,7 +283,6 @@ with st.sidebar:
             st.error(f"Error: {e}")
             chat_model = None
     
-    # Borrar
     with st.expander("🗑️ Borrar"):
         if conversaciones:
             if st.button("🗑️ Eliminar TODAS", type="primary"):
@@ -293,7 +311,6 @@ prompt_template = PromptTemplate(
 if 'chat_model' in locals() and chat_model:
     cadena = prompt_template | chat_model
 
-# Mostrar mensajes
 for msg in st.session_state.mensajes:
     role = "assistant" if isinstance(msg, AIMessage) else "user"
     with st.chat_message(role):
@@ -303,7 +320,6 @@ if not st.session_state.mensajes:
     with st.chat_message("assistant"):
         st.markdown("👋 ¡Hola! Cuéntame, ¿de qué quieres hablar?")
 
-# Input
 pregunta = st.chat_input("Escribe tu mensaje...")
 
 if pregunta and 'cadena' in locals():
@@ -335,4 +351,4 @@ if pregunta and 'cadena' in locals():
         st.error(f"Error: {e}")
 
 st.markdown("---")
-st.caption("🔒 **Privacidad total** - Cada dispositivo tiene sus propias conversaciones. Compartir el enlace no comparte tus chats.")
+st.caption("🔒 **Privacidad total** - Cada dispositivo tiene sus propias conversaciones")
